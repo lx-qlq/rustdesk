@@ -28,7 +28,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   # ============================================================
-  # Windows — 绿包 + MSI（无 hwcodec）
+  # Windows — 安装版（portable packer + MSI）
   # ============================================================
   build-windows:
     name: windows-x64
@@ -82,11 +82,12 @@ jobs:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
 
-      # Manifest 模式可能缺包，用 classic 强制
-      - name: Install vcpkg deps
+      # Manifest 模式为主；若仍缺 vpx 再退到 classic 单行
+      - name: Install vcpkg dependencies
         shell: bash
         run: |
-          $VCPKG_ROOT/vcpkg install libvpx libyuv opus libaom --triplet x64-windows-static --classic
+          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static || \
+          $VCPKG_ROOT/vcpkg install vpx --triplet x64-windows-static --classic
 
       - name: Build portable exe
         shell: pwsh
@@ -94,7 +95,7 @@ jobs:
           python3 .\build.py --portable --flutter --skip-portable-pack
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
 
-      - name: Build self-extracting + MSI
+      - name: Build self-extracting installer + MSI
         shell: bash
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
@@ -105,7 +106,6 @@ jobs:
           mkdir -p SignOutput
           mv ./target/release/rustdesk-portable-packer.exe SignOutput/rustdesk-${{ env.VERSION }}-x64.exe
 
-          # MSI
           pushd ./res/msi
           python preprocess.py --arp -d ../../rustdesk
           nuget restore msi.sln
@@ -120,7 +120,7 @@ jobs:
           path: SignOutput/
 
   # ============================================================
-  # Android — aarch64 only，无 hwcodec
+  # Android — aarch64 only（方案 A：upstream/master）
   # ============================================================
   build-android:
     name: android-aarch64
@@ -151,12 +151,17 @@ jobs:
           name: bridge-artifact
           path: ./
 
-      # 强制对齐 hbb_common（无本地场景）
-      - name: Force hbb_common commit
+      # ── 方案 A：强制 hbb_common 对齐上游 master ──
+      - name: Force hbb_common to upstream master (CI only)
+        shell: bash
         run: |
           cd libs/hbb_common
-          git fetch origin
-          git checkout 398e5a89f8f16bbb9c3e7c6d5a4b3c2d1e0f9a8b
+          git remote get-url upstream 2>/dev/null || \
+            git remote add upstream https://github.com/rustdesk-org/hbb_common.git
+          git fetch upstream master
+          git checkout upstream/master
+          echo "hbb_common HEAD:"
+          git log --oneline -1
           cd ..
 
       - uses: subosito/flutter-action@v2
