@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
 
-  # Windows Flutter x64 新版（仅保留）
+  # Windows Flutter x64
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
@@ -144,7 +144,8 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip -DestinationPath .
           Remove-Item -Path usbmmidd_v2\Win32 -Recurse
-          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd.bat"
+          # 修复：删除不存在的 usbmmidd.bat，只保留存在的exe
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe"
           mv -Force .\usbmmidd_v2 ./rustdesk
           try {
             Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
@@ -228,7 +229,7 @@ jobs:
             ./SignOutput/rustdesk-*.msi
             ./SignOutput/rustdesk-*.exe
 
-  # Android 仅保留 aarch64 (arm64-v8a)，删除armv7/x86_64，删除universal通用包
+  # Android aarch64 only
   build-rustdesk-android:
     name: build rustdesk android aarch64 apk
     needs: [generate-bridge]
@@ -337,11 +338,13 @@ jobs:
           mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
           cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
-          pushd flutter
+          cd flutter
           flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-arm64 --split-per-abi
-          mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
-          popd
-          mkdir -p signed-apk; mv ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk .
+          # 修复：当前在flutter目录，apk在build/app/outputs/flutter-apk/，直接复制到上级根目录
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+          cd ..
+          mkdir -p signed-apk
+          mv rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk signed-apk/
       - name: Setup sign tool version variable
         shell: bash
         run: |
@@ -380,4 +383,4 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
+            signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
