@@ -8,9 +8,12 @@ on:
       upload-tag:
         type: string
         default: "nightly"
-# NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
-# variables from this workflow!
+# 解决发布403权限核心配置
+permissions:
+  contents: write
 env:
+  # 消除Node20废弃警告
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   SCITER_RUST_VERSION: "1.75"
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
@@ -50,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
 
-  # Windows Flutter x64
+  # Windows Flutter x64 唯一编译任务
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
@@ -144,7 +147,7 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip -DestinationPath .
           Remove-Item -Path usbmmidd_v2\Win32 -Recurse
-          # 修复：删除不存在的 usbmmidd.bat，只保留存在的exe
+          # 修复：删除不存在的 usbmmidd.bat，只保留两个exe
           Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe"
           mv -Force .\usbmmidd_v2 ./rustdesk
           try {
@@ -180,19 +183,19 @@ jobs:
         with:
           name: topmostwindow-artifacts
           path: "./rustdesk"
-      - name: Upload unsigned
+      - name: Upload unsigned build folder
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@master
         with:
           name: rustdesk-unsigned-windows-${{ matrix.job.arch }}
           path: rustdesk
-      - name: Sign rustdesk files
+      - name: Sign raw rustdesk files
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
         shell: bash
         run: |
           pip3 install requests argparse
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./rustdesk/
-      - name: Build self-extracted executable
+      - name: Build self-extracting exe
         shell: bash
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
@@ -205,7 +208,7 @@ jobs:
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
-      - name: Build msi
+      - name: Build MSI installer
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           pushd ./res/msi
@@ -214,13 +217,13 @@ jobs:
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           mv ./Package/bin/x64/Release/en-us/Package.msi ../../SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.msi
           sha256sum ../../SignOutput/rustdesk-*.msi
-      - name: Sign rustdesk self-extracted file
+      - name: Sign installer packages
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
         shell: bash
         run: |
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
-      - name: Publish Release
-        uses: softprops/action-gh-release@v1
+      - name: Publish Windows files to GitHub Releases
+        uses: softprops/action-gh-release@v2
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           prerelease: true
@@ -229,7 +232,7 @@ jobs:
             ./SignOutput/rustdesk-*.msi
             ./SignOutput/rustdesk-*.exe
 
-  # Android aarch64 only
+  # Android 仅 aarch64(arm64-v8a) 单架构编译
   build-rustdesk-android:
     name: build rustdesk android aarch64 apk
     needs: [generate-bridge]
@@ -262,21 +265,21 @@ jobs:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
                clang cmake curl gcc-multilib git g++ g++-multilib libayatana-appindicator3-dev libasound2-dev libc6-dev libclang-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libpam0g-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxdo-dev libxfixes-dev llvm-dev nasm ninja-build openjdk-17-jdk-headless pkg-config tree wget
-      - name: Checkout source code
+      - name: Checkout full source with submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Install flutter
+      - name: Install Flutter Android SDK
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
           flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
-      - name: Patch flutter
+      - name: Apply Flutter patch
         run: |
           cd $(dirname $(dirname $(which flutter)))
           [[ "3.24.5" == ${{env.ANDROID_FLUTTER_VERSION}} ]] && git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
@@ -285,20 +288,20 @@ jobs:
         with:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
-      - name: Setup vcpkg with Github Actions binary cache
+      - name: Setup vcpkg cache
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: /opt/artifacts/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
-      - name: Install vcpkg dependencies
+      - name: Build Android vcpkg libs
         run: |
           ANDROID_TARGET=arm64-v8a
           if ! ./flutter/build_android_deps.sh "${ANDROID_TARGET}"; then
             find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do echo "$_1:"; cat "$_1"; done; exit 1
           fi
         shell: bash
-      - name: Restore bridge files
+      - name: Restore bridge code artifact
         uses: actions/download-artifact@master
         with:
           name: bridge-artifact
@@ -312,7 +315,7 @@ jobs:
         with:
           prefix-key: rustdesk-lib-cache-android
           key: ${{ matrix.job.target }}
-      - name: Build rustdesk lib
+      - name: Compile Rust core library
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -322,12 +325,12 @@ jobs:
           ./flutter/ndk_arm64.sh
           mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
           cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
-      - name: Upload Rustdesk library to Artifacts
+      - name: Upload librustdesk.so artifact
         uses: actions/upload-artifact@master
         with:
           name: librustdesk.so.${{ matrix.job.target }}
           path: ./target/${{ matrix.job.target }}/release/liblibrustdesk.so
-      - name: Build rustdesk
+      - name: Build Flutter APK
         shell: bash
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
@@ -340,18 +343,18 @@ jobs:
           cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
           cd flutter
           flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-arm64 --split-per-abi
-          # 修复：当前在flutter目录，apk在build/app/outputs/flutter-apk/，直接复制到上级根目录
+          # 修复路径：直接复制apk到项目根目录，避免popd层级错误
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
           cd ..
           mkdir -p signed-apk
           mv rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk signed-apk/
-      - name: Setup sign tool version variable
+      - name: Detect Android build tools version
         shell: bash
         run: |
           BUILD_TOOL_VERSION=$(ls /usr/local/lib/android/sdk/build-tools/ | tail -n 1)
           echo "ANDROID_SIGN_TOOL_VERSION=$BUILD_TOOL_VERSION" >> $GITHUB_ENV
       - uses: r0adkll/sign-android-release@v1
-        name: Sign app APK
+        name: Sign compiled APK
         if: env.ANDROID_SIGNING_KEY != null
         id: sign-rustdesk
         with:
@@ -362,23 +365,23 @@ jobs:
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
         env:
           BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
-      - name: Upload Artifacts
+      - name: Upload signed APK artifact
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@master
         with:
           name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
           path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
-      - name: Publish signed apk package
+      - name: Upload signed APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
-      - name: Publish unsigned apk package
+      - name: Upload unsigned APK to Releases (no key fallback)
+        uses: softprops/action-gh-release@v2
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
-        uses: softprops/action-gh-release@v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
